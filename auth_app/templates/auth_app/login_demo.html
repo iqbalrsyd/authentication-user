@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="id">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Authentication Demo</title>
+  <script src="https://accounts.google.com/gsi/client" async defer></script>
+  <script src="https://www.google.com/recaptcha/api.js" async defer></script>
+  <style>
+    body { font: 16px/1.5 system-ui, sans-serif; max-width: 720px; margin: 40px auto; padding: 0 20px; }
+    section { border: 1px solid #ddd; border-radius: 10px; margin: 20px 0; padding: 20px; }
+    input, button { box-sizing: border-box; display: block; margin: 10px 0; padding: 10px; width: 100%; }
+    pre { background: #f5f5f5; border-radius: 8px; min-height: 80px; overflow-wrap: anywhere; padding: 14px; white-space: pre-wrap; }
+  </style>
+</head>
+<body>
+  <h1>Authentication Demo</h1>
+  <p>Halaman ini hanya tersedia ketika <code>AUTH_DEMO_ENABLED=True</code>.</p>
+
+  <section>
+    <h2>Sign in with Google</h2>
+    <div id="google-button"></div>
+    <p id="google-setup"></p>
+  </section>
+
+  <section>
+    <h2>Login dengan OTP email</h2>
+    <form id="otp-request-form">
+      <input id="email" type="email" placeholder="Email terverifikasi" required>
+      {% if recaptcha_site_key %}
+        <div class="g-recaptcha" data-sitekey="{{ recaptcha_site_key }}"></div>
+        <button type="submit">Kirim OTP login</button>
+      {% else %}
+        <p>RECAPTCHA_SITE_KEY belum diisi di .env.</p>
+        <button type="submit" disabled>Kirim OTP login</button>
+      {% endif %}
+    </form>
+    <form id="otp-verify-form">
+      <input id="code" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" placeholder="6 digit OTP" required>
+      <button type="submit">Verifikasi OTP</button>
+    </form>
+  </section>
+
+  <section>
+    <h2>Hasil API</h2>
+    <button id="me-button" type="button">Tes access token ke /me/</button>
+    <pre id="result">Belum ada request.</pre>
+  </section>
+
+  {{ google_client_id|json_script:"google-client-id" }}
+  <script>
+    const clientId = JSON.parse(document.getElementById("google-client-id").textContent);
+    const result = document.getElementById("result");
+    let accessToken = null;
+
+    async function callApi(url, options = {}) {
+      const response = await fetch(url, options);
+      const data = await response.json();
+      if (data.access) accessToken = data.access;
+      result.textContent = JSON.stringify({status: response.status, data}, null, 2);
+      return data;
+    }
+
+    window.addEventListener("load", () => {
+      if (!clientId) {
+        document.getElementById("google-setup").textContent =
+          "GOOGLE_OAUTH_CLIENT_ID belum diisi di .env.";
+        return;
+      }
+      google.accounts.id.initialize({
+        client_id: clientId,
+        callback: ({credential}) => callApi("/api/v1/auth/login/google/", {
+          method: "POST",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({credential}),
+        }),
+      });
+      google.accounts.id.renderButton(
+        document.getElementById("google-button"),
+        {theme: "outline", size: "large", text: "signin_with"}
+      );
+    });
+
+    document.getElementById("otp-request-form").addEventListener("submit", async event => {
+      event.preventDefault();
+      const recaptchaToken = typeof grecaptcha === "undefined" ? "" : grecaptcha.getResponse();
+      if (!recaptchaToken) {
+        result.textContent = "Centang dan selesaikan reCAPTCHA terlebih dahulu.";
+        return;
+      }
+      await callApi("/api/v1/auth/login/otp/request/", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({
+          email: document.getElementById("email").value,
+          recaptcha_token: recaptchaToken,
+        }),
+      });
+      grecaptcha.reset();
+    });
+
+    document.getElementById("otp-verify-form").addEventListener("submit", event => {
+      event.preventDefault();
+      callApi("/api/v1/auth/login/otp/verify/", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({
+          email: document.getElementById("email").value,
+          code: document.getElementById("code").value,
+        }),
+      });
+    });
+
+    document.getElementById("me-button").addEventListener("click", () => {
+      if (!accessToken) {
+        result.textContent = "Login terlebih dahulu agar access token tersedia.";
+        return;
+      }
+      callApi("/api/v1/auth/me/", {
+        headers: {Authorization: `Bearer ${accessToken}`},
+      });
+    });
+  </script>
+</body>
+</html>
