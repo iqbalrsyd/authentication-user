@@ -1,3 +1,4 @@
+import uuid
 from datetime import timedelta
 
 from django.conf import settings
@@ -5,6 +6,7 @@ from django.contrib.auth.hashers import check_password, make_password
 from django.contrib.auth.models import AbstractUser
 from django.db import models
 from django.utils import timezone
+from django.utils.crypto import constant_time_compare, salted_hmac
 from django.utils.translation import gettext_lazy as _
 
 from .managers import UserManager
@@ -72,6 +74,58 @@ class OneTimePassword(models.Model):
     @classmethod
     def expiry_from_now(cls):
         return timezone.now() + timedelta(seconds=settings.OTP_EXPIRY_SECONDS)
+
+
+class CaptchaChallenge(models.Model):
+    class Purpose(models.TextChoices):
+        LOGIN_OTP = "login_otp", _("Login OTP")
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    answer_hash = models.CharField(max_length=64)
+    purpose = models.CharField(max_length=32, choices=Purpose.choices)
+    expires_at = models.DateTimeField()
+    attempt_count = models.PositiveSmallIntegerField(default=0)
+    max_attempts = models.PositiveSmallIntegerField(default=3)
+    used_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        indexes = [models.Index(fields=["purpose", "created_at"])]
+
+    @staticmethod
+    def normalize_answer(raw_answer):
+        return "".join(raw_answer.split()).upper()
+
+    def set_answer(self, raw_answer):
+        normalized = self.normalize_answer(raw_answer)
+        self.answer_hash = salted_hmac(
+            "auth_app.captcha",
+            f"{self.pk}:{normalized}",
+        ).hexdigest()
+
+    def check_answer(self, raw_answer):
+        normalized = self.normalize_answer(raw_answer)
+        candidate = salted_hmac(
+            "auth_app.captcha",
+            f"{self.pk}:{normalized}",
+        ).hexdigest()
+        return constant_time_compare(candidate, self.answer_hash)
+
+    @property
+    def is_expired(self):
+        return timezone.now() >= self.expires_at
+
+    @property
+    def can_attempt(self):
+        return self.used_at is None and not self.is_expired and self.attempt_count < self.max_attempts
+
+    @classmethod
+    def expiry_from_now(cls):
+        return timezone.now() + timedelta(seconds=settings.CAPTCHA_EXPIRY_SECONDS)
+
+    def __str__(self):
+        return f"{self.purpose} - {self.pk}"
 
 
 class SocialIdentity(models.Model):

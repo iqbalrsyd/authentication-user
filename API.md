@@ -61,6 +61,24 @@ attempt limit receives the same response (`400`):
 Codes expire after `OTP_EXPIRY_SECONDS` (10 minutes by default), are single-use,
 and allow `OTP_MAX_ATTEMPTS` failed submissions (5 by default).
 
+## Create login CAPTCHA
+
+`POST /api/v1/auth/captcha/login-otp/`
+
+The response contains a public challenge ID, a base64 PNG image, and its lifetime:
+
+```json
+{
+  "captcha_id": "2f8be7e9-2cef-4608-a674-640e6d5b90ab",
+  "image": "data:image/png;base64,...",
+  "expires_in": 120
+}
+```
+
+The six-character answer is never returned or stored as plain text. CAPTCHA
+challenges are case-insensitive, single-use, expire after two minutes by default,
+and allow three failed attempts.
+
 ## Request email login OTP
 
 `POST /api/v1/auth/login/otp/request/`
@@ -68,15 +86,16 @@ and allow `OTP_MAX_ATTEMPTS` failed submissions (5 by default).
 ```json
 {
   "email": "person@example.com",
-  "recaptcha_token": "TOKEN_FROM_RECAPTCHA_V2_WIDGET"
+  "captcha_id": "2f8be7e9-2cef-4608-a674-640e6d5b90ab",
+  "captcha_answer": "A7K29P"
 }
 ```
 
-The backend verifies the reCAPTCHA token before looking up the account. A failed
-CAPTCHA returns `400`; a provider/configuration outage returns `503`. After a
-successful CAPTCHA, the endpoint returns the same `202` response for unknown,
-inactive, unverified, and eligible accounts so it does not disclose account
-state. Eligible accounts receive a single-use login code by email.
+The backend consumes a valid CAPTCHA before looking up the account. A failed,
+expired, exhausted, or reused CAPTCHA returns `400`. After a successful CAPTCHA,
+the endpoint returns the same `202` response for unknown, inactive, unverified,
+and eligible accounts so it does not disclose account state. Eligible accounts
+receive a single-use login code by email.
 
 ## Verify email login OTP
 

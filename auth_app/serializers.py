@@ -44,7 +44,11 @@ class VerifyEmailSerializer(serializers.Serializer):
 
 class EmailLoginRequestSerializer(serializers.Serializer):
     email = serializers.EmailField(max_length=255)
-    recaptcha_token = serializers.CharField(max_length=4096, trim_whitespace=False)
+    captcha_id = serializers.UUIDField()
+    captcha_answer = serializers.RegexField(
+        regex=r"^[A-Za-z0-9]{6}$",
+        trim_whitespace=True,
+    )
 
     def validate_email(self, value):
         return User.objects.normalize_email(value)

@@ -8,7 +8,8 @@ from django.utils import timezone
 from rest_framework import status
 from rest_framework.test import APITestCase
 
-from .models import OneTimePassword, SocialIdentity, User
+from .captcha import consume_login_captcha
+from .models import CaptchaChallenge, OneTimePassword, SocialIdentity, User
 from .utils import generate_otp
 
 
@@ -172,9 +173,9 @@ class EmailOTPLoginAPITests(APITestCase):
     verify_url = reverse("auth:login-otp-verify")
 
     def setUp(self):
-        self.recaptcha_patcher = patch("auth_app.views.verify_recaptcha", return_value=True)
-        self.recaptcha = self.recaptcha_patcher.start()
-        self.addCleanup(self.recaptcha_patcher.stop)
+        self.captcha_patcher = patch("auth_app.views.consume_login_captcha", return_value=True)
+        self.captcha = self.captcha_patcher.start()
+        self.addCleanup(self.captcha_patcher.stop)
         self.user = User.objects.create_user(
             email="verified@example.com",
             first_name="Verified",
@@ -186,7 +187,11 @@ class EmailOTPLoginAPITests(APITestCase):
     def request_code(self):
         response = self.client.post(
             self.request_url,
-            {"email": self.user.email, "recaptcha_token": "valid-test-token"},
+            {
+                "email": self.user.email,
+                "captcha_id": "12345678-1234-5678-1234-567812345678",
+                "captcha_answer": "ABC234",
+            },
             format="json",
         )
         code = mail.outbox[-1].body.split("login code is ", 1)[1][:6]
@@ -226,25 +231,68 @@ class EmailOTPLoginAPITests(APITestCase):
 
         response = self.client.post(
             self.request_url,
-            {"email": self.user.email, "recaptcha_token": "valid-test-token"},
+            {
+                "email": self.user.email,
+                "captcha_id": "12345678-1234-5678-1234-567812345678",
+                "captcha_answer": "ABC234",
+            },
             format="json",
         )
 
         self.assertEqual(response.status_code, status.HTTP_202_ACCEPTED)
         self.assertEqual(len(mail.outbox), 0)
 
-    def test_invalid_recaptcha_blocks_login_email(self):
-        self.recaptcha.return_value = False
+    def test_invalid_captcha_blocks_login_email(self):
+        self.captcha.return_value = False
 
         response = self.client.post(
             self.request_url,
-            {"email": self.user.email, "recaptcha_token": "invalid-test-token"},
+            {
+                "email": self.user.email,
+                "captcha_id": "12345678-1234-5678-1234-567812345678",
+                "captcha_answer": "BAD234",
+            },
             format="json",
         )
 
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertEqual(len(mail.outbox), 0)
         self.assertFalse(OneTimePassword.objects.exists())
+
+
+class CaptchaChallengeAPITests(APITestCase):
+    def test_create_captcha_returns_png_without_answer(self):
+        response = self.client.post(reverse("auth:login-captcha"), {}, format="json")
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertTrue(response.data["image"].startswith("data:image/png;base64,"))
+        self.assertNotIn("answer", response.data)
+        self.assertTrue(CaptchaChallenge.objects.filter(pk=response.data["captcha_id"]).exists())
+
+    def test_captcha_is_case_insensitive_and_single_use(self):
+        challenge = CaptchaChallenge(
+            purpose=CaptchaChallenge.Purpose.LOGIN_OTP,
+            expires_at=CaptchaChallenge.expiry_from_now(),
+            max_attempts=3,
+        )
+        challenge.set_answer("AB23XZ")
+        challenge.save()
+
+        self.assertTrue(consume_login_captcha(challenge.pk, "ab23xz"))
+        self.assertFalse(consume_login_captcha(challenge.pk, "AB23XZ"))
+
+    def test_wrong_captcha_increments_attempt_count(self):
+        challenge = CaptchaChallenge(
+            purpose=CaptchaChallenge.Purpose.LOGIN_OTP,
+            expires_at=CaptchaChallenge.expiry_from_now(),
+            max_attempts=3,
+        )
+        challenge.set_answer("AB23XZ")
+        challenge.save()
+
+        self.assertFalse(consume_login_captcha(challenge.pk, "ZZ99ZZ"))
+        challenge.refresh_from_db()
+        self.assertEqual(challenge.attempt_count, 1)
 
 
 class GoogleLoginAPITests(APITestCase):

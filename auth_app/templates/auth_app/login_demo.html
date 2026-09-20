@@ -5,11 +5,11 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Authentication Demo</title>
   <script src="https://accounts.google.com/gsi/client" async defer></script>
-  <script src="https://www.google.com/recaptcha/api.js" async defer></script>
   <style>
     body { font: 16px/1.5 system-ui, sans-serif; max-width: 720px; margin: 40px auto; padding: 0 20px; }
     section { border: 1px solid #ddd; border-radius: 10px; margin: 20px 0; padding: 20px; }
     input, button { box-sizing: border-box; display: block; margin: 10px 0; padding: 10px; width: 100%; }
+    #captcha-image { border: 1px solid #ddd; border-radius: 8px; display: block; max-width: 100%; min-height: 84px; }
     pre { background: #f5f5f5; border-radius: 8px; min-height: 80px; overflow-wrap: anywhere; padding: 14px; white-space: pre-wrap; }
   </style>
 </head>
@@ -27,13 +27,11 @@
     <h2>Login dengan OTP email</h2>
     <form id="otp-request-form">
       <input id="email" type="email" placeholder="Email terverifikasi" required>
-      {% if recaptcha_site_key %}
-        <div class="g-recaptcha" data-sitekey="{{ recaptcha_site_key }}"></div>
-        <button type="submit">Kirim OTP login</button>
-      {% else %}
-        <p>RECAPTCHA_SITE_KEY belum diisi di .env.</p>
-        <button type="submit" disabled>Kirim OTP login</button>
-      {% endif %}
+      <img id="captcha-image" alt="CAPTCHA 6 karakter">
+      <button id="captcha-refresh" type="button">Ganti CAPTCHA</button>
+      <input id="captcha-answer" type="text" maxlength="6" autocomplete="off"
+             placeholder="Masukkan 6 karakter CAPTCHA" required>
+      <button type="submit">Kirim OTP login</button>
     </form>
     <form id="otp-verify-form">
       <input id="code" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" placeholder="6 digit OTP" required>
@@ -52,6 +50,7 @@
     const clientId = JSON.parse(document.getElementById("google-client-id").textContent);
     const result = document.getElementById("result");
     let accessToken = null;
+    let captchaId = null;
 
     async function callApi(url, options = {}) {
       const response = await fetch(url, options);
@@ -61,7 +60,21 @@
       return data;
     }
 
+    async function loadCaptcha() {
+      const response = await fetch("/api/v1/auth/captcha/login-otp/", {method: "POST"});
+      const data = await response.json();
+      if (!response.ok) {
+        result.textContent = JSON.stringify({status: response.status, data}, null, 2);
+        captchaId = null;
+        return;
+      }
+      captchaId = data.captcha_id;
+      document.getElementById("captcha-image").src = data.image;
+      document.getElementById("captcha-answer").value = "";
+    }
+
     window.addEventListener("load", () => {
+      loadCaptcha();
       if (!clientId) {
         document.getElementById("google-setup").textContent =
           "GOOGLE_OAUTH_CLIENT_ID belum diisi di .env.";
@@ -83,9 +96,9 @@
 
     document.getElementById("otp-request-form").addEventListener("submit", async event => {
       event.preventDefault();
-      const recaptchaToken = typeof grecaptcha === "undefined" ? "" : grecaptcha.getResponse();
-      if (!recaptchaToken) {
-        result.textContent = "Centang dan selesaikan reCAPTCHA terlebih dahulu.";
+      const captchaAnswer = document.getElementById("captcha-answer").value;
+      if (!captchaId || captchaAnswer.length !== 6) {
+        result.textContent = "Masukkan 6 karakter CAPTCHA terlebih dahulu.";
         return;
       }
       await callApi("/api/v1/auth/login/otp/request/", {
@@ -93,11 +106,14 @@
         headers: {"Content-Type": "application/json"},
         body: JSON.stringify({
           email: document.getElementById("email").value,
-          recaptcha_token: recaptchaToken,
+          captcha_id: captchaId,
+          captcha_answer: captchaAnswer,
         }),
       });
-      grecaptcha.reset();
+      await loadCaptcha();
     });
+
+    document.getElementById("captcha-refresh").addEventListener("click", loadCaptcha);
 
     document.getElementById("otp-verify-form").addEventListener("submit", event => {
       event.preventDefault();

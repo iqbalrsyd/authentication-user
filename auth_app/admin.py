@@ -1,7 +1,7 @@
 from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin
 
-from .models import OneTimePassword, SocialIdentity, User
+from .models import CaptchaChallenge, OneTimePassword, SocialIdentity, User
 
 
 @admin.register(User)
@@ -41,6 +41,12 @@ class CustomUserAdmin(UserAdmin):
 class OneTimePasswordAdmin(admin.ModelAdmin):
     list_display = ("user", "purpose", "created_at", "expires_at", "attempt_count", "used_at")
     readonly_fields = ("otp_hash", "created_at")
+
+
+@admin.register(CaptchaChallenge)
+class CaptchaChallengeAdmin(admin.ModelAdmin):
+    list_display = ("id", "purpose", "created_at", "expires_at", "attempt_count", "used_at")
+    readonly_fields = ("answer_hash", "created_at")
 
 
 @admin.register(SocialIdentity)

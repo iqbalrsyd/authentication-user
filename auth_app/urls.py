@@ -6,6 +6,7 @@ from .views import (
     EmailLoginRequestView,
     EmailLoginVerifyView,
     GoogleLoginView,
+    LoginCaptchaView,
     LoginDemoView,
     RegisterUserView,
     VerifyEmailView,
@@ -16,6 +17,7 @@ app_name = "auth"
 
 urlpatterns = [
     path("demo/", LoginDemoView.as_view(), name="login-demo"),
+    path("captcha/login-otp/", LoginCaptchaView.as_view(), name="login-captcha"),
     path("register/", RegisterUserView.as_view(), name="register"),
     path("verify-email/", VerifyEmailView.as_view(), name="verify-email"),
     path("login/otp/request/", EmailLoginRequestView.as_view(), name="login-otp-request"),

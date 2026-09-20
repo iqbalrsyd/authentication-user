@@ -7,18 +7,16 @@ from rest_framework import status
 from rest_framework.generics import GenericAPIView
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
+from rest_framework.throttling import AnonRateThrottle
+from rest_framework.views import APIView
 
+from .captcha import consume_login_captcha, create_login_captcha
 from .google_auth import (
     GoogleLoginConfigurationError,
     GoogleLoginError,
     verify_google_credential,
 )
 from .models import OneTimePassword, SocialIdentity, User
-from .recaptcha import (
-    RecaptchaConfigurationError,
-    RecaptchaServiceError,
-    verify_recaptcha,
-)
 from .serializers import (
     CurrentUserSerializer,
     EmailLoginRequestSerializer,
@@ -29,6 +27,10 @@ from .serializers import (
 )
 from .tokens import authentication_response
 from .utils import EmailDeliveryError, send_code_to_user, send_login_code_to_user
+
+
+class LoginCaptchaThrottle(AnonRateThrottle):
+    rate = "20/min"
 
 
 class LoginDemoView(TemplateView):
@@ -47,8 +49,30 @@ class LoginDemoView(TemplateView):
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         context["google_client_id"] = settings.GOOGLE_OAUTH_CLIENT_ID
-        context["recaptcha_site_key"] = settings.RECAPTCHA_SITE_KEY
         return context
+
+
+class LoginCaptchaView(APIView):
+    permission_classes = [AllowAny]
+    throttle_classes = [LoginCaptchaThrottle]
+
+    def post(self, request):
+        try:
+            challenge, image = create_login_captcha()
+        except OSError:
+            return Response(
+                {"message": "CAPTCHA generation is temporarily unavailable."},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+
+        return Response(
+            {
+                "captcha_id": str(challenge.pk),
+                "image": image,
+                "expires_in": settings.CAPTCHA_EXPIRY_SECONDS,
+            },
+            status=status.HTTP_201_CREATED,
+        )
 
 
 class RegisterUserView(GenericAPIView):
@@ -135,20 +159,12 @@ class EmailLoginRequestView(GenericAPIView):
             "message": "If the account can sign in, a login code will be sent by email."
         }
 
-        try:
-            captcha_valid = verify_recaptcha(
-                token=serializer.validated_data["recaptcha_token"],
-                remote_ip=request.META.get("REMOTE_ADDR"),
-            )
-        except (RecaptchaConfigurationError, RecaptchaServiceError):
+        if not consume_login_captcha(
+            challenge_id=serializer.validated_data["captcha_id"],
+            answer=serializer.validated_data["captcha_answer"],
+        ):
             return Response(
-                {"message": "Human verification is temporarily unavailable."},
-                status=status.HTTP_503_SERVICE_UNAVAILABLE,
-            )
-
-        if not captcha_valid:
-            return Response(
-                {"recaptcha_token": ["Human verification failed. Please try again."]},
+                {"captcha_answer": ["CAPTCHA is invalid or no longer available."]},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
